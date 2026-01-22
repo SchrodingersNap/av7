@@ -5,7 +5,7 @@ import re
 import io
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="AV7 Gap Analyzer V4", layout="wide")
+st.set_page_config(page_title="AV7 Gap Analyzer V5", layout="wide")
 
 # --- HELPER FUNCTIONS ---
 def clean_flight_number(flight_str):
@@ -13,12 +13,6 @@ def clean_flight_number(flight_str):
     return re.sub(r'[^A-Za-z0-9]', '', str(flight_str)).upper()
 
 def smart_parse(paste_string, expected_cols):
-    """
-     Intelligently parses pasted data.
-     1. Tries to read it normally (assuming headers exist).
-     2. If the headers don't match, checks if the COLUMN COUNT matches.
-     3. If column count matches, it assumes data was pasted without headers.
-    """
     try:
         if not paste_string: return None
         # Attempt 1: Read assuming headers are present
@@ -43,14 +37,14 @@ def smart_parse(paste_string, expected_cols):
 # --- SIDEBAR: CONFIGURATION ---
 st.sidebar.header("Configuration")
 
-# 1. Gap Threshold (UPDATED DEFAULT TO 5)
+# 1. Gap Threshold
 st.sidebar.subheader("Sensitivity")
 slack_minutes = st.sidebar.slider("Slack Minutes", 15, 120, 60)
 series_jump_threshold = st.sidebar.number_input(
     "Ignore gaps larger than (Receipts)", 
     value=5, 
     min_value=1,
-    help="If a gap is larger than this number (e.g. 10 missing receipts in a row), the tool ignores it. Set to '2' to find only single missing receipts."
+    help="If a gap is larger than this number (e.g. 10 missing receipts in a row), the tool ignores it."
 )
 
 # 2. Exclusions
@@ -82,7 +76,6 @@ st.markdown("Copy your data directly from Excel and paste it below.")
 
 col1, col2 = st.columns(2)
 
-# Define expected columns for validation
 REQ_REFUEL = ['AV7', 'Flight', 'Refuel_Time']
 REQ_SCHED = ['Flight', 'STD']
 
@@ -133,7 +126,6 @@ if st.button("Analyze Gaps", type="primary"):
             
             df_schedule['STD_Parsed'] = df_schedule['STD'].apply(parse_std)
 
-            # Debug Expander
             with st.expander("🛠️ Debug: View Processed Data"):
                 st.dataframe(df_refuel_clean.head())
 
@@ -155,11 +147,8 @@ if st.button("Analyze Gaps", type="primary"):
                 next_av7 = df_refuel_clean.loc[i+1, 'AV7_Num']
                 gap_size = next_av7 - current_av7
 
-                # --- GAP LOGIC ---
                 if gap_size > 1:
-                    # Check if gap is too big (Ignore sequential blocks)
-                    if gap_size > series_jump_threshold: 
-                        continue 
+                    if gap_size > series_jump_threshold: continue 
                     
                     t_prev = df_refuel_clean.loc[i, 'Refuel_Time']
                     t_next = df_refuel_clean.loc[i+1, 'Refuel_Time']
@@ -180,7 +169,6 @@ if st.button("Analyze Gaps", type="primary"):
                     for _, row in missing_flights_df.iterrows():
                         f_mins = row['STD_Minutes']
                         if pd.isnull(f_mins): continue
-                        # Handle basic day boundaries if needed, keeping simple for now
                         if start_mins <= f_mins <= end_mins:
                             candidates.append(f"{row['Flight']} ({row['STD_Parsed'].strftime('%H:%M')})")
 
@@ -197,18 +185,19 @@ if st.button("Analyze Gaps", type="primary"):
                             'POTENTIAL_FLIGHTS': candidate_str
                         })
 
-            # --- RESULT DISPLAY ---
             if predictions:
                 res_df = pd.DataFrame(predictions)
                 st.success(f"Found {len(res_df)} missing receipts.")
                 st.dataframe(res_df, use_container_width=True)
                 
-                buffer = io.BytesIO()
-                # --- CRASH FIX: Changed engine to openpyxl ---
-                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                    res_df.to_excel(writer, index=False, sheet_name='Sheet1')
-                    
-                st.download_button("📥 Download Results", buffer, "missing_av7_report.xlsx")
+                # --- CSV DOWNLOAD (CRASH PROOF) ---
+                csv_data = res_df.to_csv(index=False).encode('utf-8')
+                
+                st.download_button(
+                    label="📥 Download Results (CSV)",
+                    data=csv_data,
+                    file_name="missing_av7_report.csv",
+                    mime="text/csv"
+                )
             else:
                 st.warning("No missing AV7s found.")
-                st.info("If you expected to see missing numbers but don't, check the 'Sensitivity' settings in the sidebar.")
